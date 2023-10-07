@@ -25,6 +25,8 @@
     atomvm_packbeam_provider,
     atomvm_esp32_flash_provider,
     atomvm_stm32_flash_provider,
+    atomvm_pico_flash_provider,
+    atomvm_uf2create_provider,
     legacy_packbeam_provider,
     legacy_esp32_flash_provider,
     legacy_stm32_flash_provider
