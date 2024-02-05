@@ -57,7 +57,7 @@ init(State) ->
         {short_desc, "Convert an AtomVM packbeam file to uf2 and copy to a an rp2040 device"},
         {desc,
             "~n"
-            "Use this plugin to convert an AtomVM packbeam file to a rp2040 a uf2 file and copy to an rp2040 devices.~n"
+            "Use this plugin to convert an AtomVM packbeam file to a uf2 file and copy to a rp2040 device.~n"
         }
     ]),
     {ok, rebar_state:add_provider(State, Provider)}.
@@ -202,17 +202,38 @@ do_flash(ProjectApps, PicoPath, ResetPort) ->
             ok;
         true ->
             Flag = get_stty_file_flag(),
-            Reset = lists:join(" ", [
+            BootselMode = lists:join(" ", [
                 "stty", Flag, ResetPort, "1200"
             ]),
             rebar_api:info("Resetting device at path ~s", [ResetPort]),
-            ResetStatus = os:cmd(Reset),
+            ResetStatus = os:cmd(BootselMode),
             case ResetStatus of
                 "" ->
                     ok;
-                _Any ->
-                    rebar_api:error("Reset ~s failed. Is tty console attached?", [ResetPort]),
-                    rebar_api:abort()
+                Error ->
+                    case os:find_executable(picotool) of
+                        false ->
+                            rebar_api:error("Warning: ~s~nUnable to locate 'picotool', close the serial monitor before flashing, or install picotool for automatic disconnect and BOOTSEL mode.", [Error]),
+                            rebar_api:abort();
+                        _Path ->
+                            rebar_api:warn("Warning: ~s~nFor faster flashing remember to disconnect serial monitor first.", [Error]),
+                            DevReset = lists:join(" ", [
+                                "picotool", "reboot", "-f"
+                            ]),
+                            rebar_api:warn("Disconnecting serial monitor with: `~s' in 5 seconds...", [DevReset]),
+                            timer:sleep(5000),
+                            RebootStatus = os:cmd(DevReset),
+                            case RebootStatus of
+                                "The device was asked to reboot into application mode.\n" ->
+                                    % wait for reboot to settle before attempting to enter BOOTSEL mode
+                                    timer:sleep(3000),
+                                    os:cmd(BootselMode),
+                                    ok;
+                                BootError ->
+                                    rebar_api:error("Failed to prepare pico for flashing: ~s", [BootError]),
+                                    rebar_api:abort()
+                            end
+                    end
             end,
             rebar_api:info("Waiting for the device at path ~s to settle and mount...", [PicoPath]),
             wait_for_mount(PicoPath, 0)
