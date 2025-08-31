@@ -61,6 +61,7 @@ See the various flash tasks described below for information about how to flash t
 
 The [`rebar3`](https://rebar3.org) plugin provides the following tasks under the `atomvm` namespace:
 
+* `compile` Optionally precompile jit native code.
 * `packbeam`  Generate AtomVM packbeam files from your [`rebar3`](https://rebar3.org) project and its dependencies.
 * `esp32_flash`  Flash AtomVM packbeam files to ESP32 devices over a serial connection.
 * `stm32_flash`  Flash AtomVM packbeam files to STM32 devices over a serial connection.
@@ -97,7 +98,27 @@ A typical `rebar.config` entry for this plugin therefore takes the form:
         ...
     ]}.
 
-Configuration in `rebar.config` is optional but can be useful in some cases.  For example, the flash tasks depend on the `packbeam` task, to ensure that the AVM file is up to date before flashing.  However, if the AVM file is rebuilt, the flash task has no way to tell the `packbeam` task any task-specific properties it should use as part of the rebuild.  If they are defined in `rebar.config` (or in environment variables), however, they will be used during an implicit rebuild of the AVM file.
+Configuration in `rebar.config` is optional but can be useful in some cases.  For example, the flash tasks depend on the `packbeam` task - which depends on the `compile` task, to ensure that the AVM file is up to date before flashing.  However, if the AVM file is rebuilt, the flash task has no way to tell the `packbeam` or `compile` task any task-specific properties it should use as part of the rebuild.  If they are defined in `rebar.config` (or in environment variables), however, they will be used during an implicit rebuild of the AVM file.
+
+### The `compile` task
+
+```
+
+$ rebar3 help atomvm compile
+...
+
+This plugin is generally called internally by packbeam.
+
+The default compiler is the 'emu' bytecode compiler, but optionally the jit compiler may
+be used to precompile native code.
+
+Supported target architectures for the jit compiler are currently x86_64 and aarch64.
+
+Usage: rebar3 atomvm compile [-t <arch>]
+
+  -t, --arch  Target architecture if using the jit compiler (default emu,
+              no jit)
+```
 
 ### The `packbeam` task
 

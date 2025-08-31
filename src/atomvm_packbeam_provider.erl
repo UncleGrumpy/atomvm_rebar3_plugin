@@ -23,10 +23,10 @@
 
 -export([init/1, do/1, format_error/1]).
 
--include_lib("kernel/include/file.hrl").
+%-include_lib("kernel/include/file.hrl").
 
 -define(PROVIDER, packbeam).
--define(DEPS, [bootstrap]).
+-define(DEPS, [compile]).
 -define(OPTS, [
     {external, $e, "external", string, "External AVM modules"},
     {force, $f, "force", boolean, "Force rebuild"},
@@ -35,7 +35,8 @@
     {application, $a, "application", boolean, "Build a OTP application"},
     {remove_lines, $r, "remove_lines", boolean,
         "Remove line information from generated AVM files (off by default)"},
-    {list, $l, "list", boolean, "List the contents of AVM files after creation"}
+    {list, $l, "list", boolean, "List the contents of AVM files after creation"},
+    {arch, $t, "arch", string, "Jit target arch (default emu, no jit) *Requires OTP >= 28"}
 ]).
 
 -define(DEFAULT_OPTS, #{
@@ -45,7 +46,8 @@
     start => undefined,
     application => false,
     remove_lines => false,
-    list => false
+    list => false,
+    arch => "emu"
 }).
 
 %% abstract representation of a simple shim that
@@ -114,7 +116,8 @@ do(State) ->
             get_start_module(Opts),
             maps:get(application, Opts),
             not maps:get(remove_lines, Opts),
-            maps:get(list, Opts)
+            maps:get(list, Opts),
+            maps:get(arch, Opts)
         ),
         {ok, State}
     catch
@@ -146,7 +149,8 @@ get_opts(State) ->
     {ParsedArgs, _} = rebar_state:command_parsed_args(State),
     RebarOpts = atomvm_rebar3_plugin:get_atomvm_rebar_provider_config(State, ?PROVIDER),
     SquashedOpts = atomvm_rebar3_plugin:proplist_to_map(squash_external_avms(ParsedArgs)),
-    maps:merge(?DEFAULT_OPTS, maps:merge(RebarOpts, SquashedOpts)).
+    Opts = maps:merge(?DEFAULT_OPTS, maps:merge(RebarOpts, SquashedOpts)),
+    maps:update(arch, atomvm_rebar3_plugin:validate_compile_target(maps:get(arch, Opts)), Opts).
 
 %% @private
 squash_external_avm({external, AVMPath}, Accum) ->
@@ -178,12 +182,23 @@ squash_external_avms(ParsedArgs) ->
 
 %% @private
 do_packbeam(
-    ProjectApps, Deps, ExternalAVMs, Prune, Force, StartModule, IsApplication, IncludeLines, List
+    ProjectApps,
+    Deps,
+    ExternalAVMs,
+    Prune,
+    Force,
+    StartModule,
+    IsApplication,
+    IncludeLines,
+    List,
+    Target
 ) ->
-    DepFileSets = [get_files(Dep) || Dep <- Deps],
-    ProjectAppFileSets = [get_files(ProjectApp) || ProjectApp <- ProjectApps],
+    DepFileSets = [get_files(Target, Dep) || Dep <- Deps],
+    ProjectAppFileSets = [get_files(Target, ProjectApp) || ProjectApp <- ProjectApps],
     DepsAvms = [
-        maybe_create_packbeam(DepFileSet, [], false, Force, undefined, false, IncludeLines, false)
+        maybe_create_packbeam(
+            DepFileSet, [], false, Force, undefined, false, IncludeLines, false, Target
+        )
      || DepFileSet <- DepFileSets
     ],
     [
@@ -195,24 +210,34 @@ do_packbeam(
             StartModule,
             IsApplication,
             IncludeLines,
-            List
+            List,
+            Target
         )
      || ProjectAppFileSet <- ProjectAppFileSets
     ],
     ok.
 
 %% @private
-get_files(App) ->
+get_files(Target, App) ->
     OutDir = rebar_app_info:out_dir(App),
-    EBinDir = rebar_app_info:ebin_dir(App),
-    TestDir = filename:join([rebar_app_info:dir(App), "test"]),
-    BootstrapEBinDir = filename:join(OutDir, "bootstrap_ebin"),
+    {EBinDir, TestDir, BootstrapEBinDir} =
+        case Target of
+            "emu" ->
+                EBinDir0 = rebar_app_info:ebin_dir(App),
+                TestDir0 = filename:join([rebar_app_info:dir(App), "test"]),
+                BootstrapEBinDir0 = filename:join(OutDir, "bootstrap_ebin"),
+                {EBinDir0, TestDir0, BootstrapEBinDir0};
+            Arch ->
+                EBinDir1 = filename:join([rebar_app_info:ebin_dir(App), Arch]),
+                TestDir1 = filename:join([rebar_app_info:dir(App), "test", Arch]),
+                BootstrapEBinDir1 = filename:join([OutDir, "bootstrap_ebin", Arch]),
+                {EBinDir1, TestDir1, BootstrapEBinDir1}
+        end,
     BeamFiles =
         get_beam_files(EBinDir) ++ get_beam_files(BootstrapEBinDir) ++ get_beam_files(TestDir),
-    AppFile = get_app_file(EBinDir),
+    AppFile = get_app_file(rebar_app_info:ebin_dir(App)),
     PrivFiles = get_all_files(filename:join(OutDir, "priv")),
     Name = binary_to_list(rebar_app_info:name(App)),
-    % rebar_api:info("BEAM files for App ~p from OutDir ~p: ~p", [rebar_app_info:name(App), OutDir, BeamFiles]),
     #file_set{
         name = Name,
         out_dir = OutDir,
@@ -270,7 +295,7 @@ get_all_files(Dir) ->
 
 %% @private
 maybe_create_packbeam(
-    FileSet, AvmFiles, Prune, Force, StartModule, IsApplication, IncludeLines, List
+    FileSet, AvmFiles, Prune, Force, StartModule, IsApplication, IncludeLines, List, Target
 ) ->
     #file_set{
         name = Name,
@@ -286,29 +311,25 @@ maybe_create_packbeam(
             undefined -> [];
             _ -> [AppFile]
         end,
-    case Force orelse needs_build(TargetAVM, BeamFiles ++ PrivFiles ++ AvmFiles ++ AppFiles) of
+    case
+        Force orelse needs_build(TargetAVM, BeamFiles ++ PrivFiles ++ AvmFiles ++ AppFiles, Target)
+    of
         true ->
             create_packbeam(
                 FileSet, AvmFiles, Prune, StartModule, IsApplication, IncludeLines, List
             );
         _ ->
-            rebar_api:debug("No packbeam build needed.", []),
+            rebar_api:info("No packbeam build needed.", []),
             TargetAVM
     end.
 
 %% @private
-needs_build(Path, PathList) ->
-    not filelib:is_file(Path) orelse
-        modified_time(Path) < latest_modified_time(PathList).
-
-%% @private
-modified_time(Path) ->
-    {ok, #file_info{mtime = MTime}} = file:read_file_info(Path, [{time, posix}]),
-    MTime.
-
-%% @private
-latest_modified_time(PathList) ->
-    lists:max([modified_time(Path) || Path <- PathList]).
+needs_build(Avm, PathList, Target) ->
+    rebar_api:debug("Comparing ~s to ~p for arch ~s", [Avm, PathList, Target]),
+    not filelib:is_file(Avm) orelse
+        Target =/= atomvm_priv_packedbeam_parser:get_target_arch(Avm) orelse
+        atomvm_rebar3_plugin:modified_time(Avm) <
+            atomvm_rebar3_plugin:latest_modified_time(PathList).
 
 %% @private
 create_packbeam(FileSet, AvmFiles, Prune, StartModule, IsApplication, IncludeLines, List) ->

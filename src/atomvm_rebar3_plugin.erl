@@ -19,13 +19,23 @@
 %%
 -module(atomvm_rebar3_plugin).
 
+-include_lib("jit/include/jit.hrl").
+-include_lib("kernel/include/file.hrl").
+
 -export([init/1]).
 
 %% internal API
--export([proplist_to_map/1, get_atomvm_rebar_provider_config/2]).
+-export([
+    proplist_to_map/1,
+    get_atomvm_rebar_provider_config/2,
+    validate_compile_target/1,
+    modified_time/1,
+    latest_modified_time/1
+]).
 
 -define(PROVIDERS, [
     atomvm_bootstrap_provider,
+    atomvm_compile_provider,
     atomvm_packbeam_provider,
     atomvm_dialyzer_provider,
     atomvm_esp32_flash_provider,
@@ -70,3 +80,58 @@ get_atomvm_rebar_provider_config(State, Provider) ->
         AtomVM ->
             proplist_to_map(proplists:get_value(Provider, AtomVM, []))
     end.
+
+-spec modified_time(Path :: file:name_all()) -> file:date_time() | non_neg_integer().
+modified_time(Path) ->
+    {ok, #file_info{mtime = MTime}} = file:read_file_info(Path, [{time, posix}]),
+    MTime.
+
+-spec latest_modified_time(PathList :: file:name_all()) -> file:date_time() | non_neg_integer().
+latest_modified_time(PathList) ->
+    lists:max([modified_time(Path) || Path <- PathList]).
+
+-spec validate_compile_target(Target :: string() | atom() | non_neg_integer()) -> string().
+validate_compile_target(Target) ->
+    case Target of
+        ?JIT_ARCH_X86_64 ->
+            "x86_64";
+        "x86_64" ->
+            "x86_64";
+        x86_64 ->
+            "x86_64";
+        ?JIT_ARCH_AARCH64 ->
+            "aarch64";
+        "aarch64" ->
+            "aarch64";
+        aarch64 ->
+            "aarch64";
+        "arm64" ->
+            "aarch64";
+        arm64 ->
+            "aarch64";
+        ?JIT_ARCH_ARMV6M ->
+            "armv6m";
+        "armv6m" ->
+            "armv6m";
+        armv6m ->
+            "armv6m";
+        "arm32" ->
+            "armv6m";
+        arm32 ->
+            "armv6m";
+        "host" ->
+            get_host_arch();
+        host ->
+            get_host_arch();
+        "emu" ->
+            "emu";
+        emu ->
+            "emu";
+        Unsupported ->
+            rebar_api:error("Cannot compile native code for unsupported ~s target", [Unsupported])
+    end.
+
+%% @private
+get_host_arch() ->
+    Arch = string:trim(os:cmd("uname -m")),
+    validate_compile_target(Arch).
