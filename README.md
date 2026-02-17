@@ -424,7 +424,7 @@ The `pico_flash` task depends on the `uf2create` task which in turn depends on t
     ===> Compiling hex_core
     ===> Compiling verl
     ===> Compiling rebar3_hex
-    ===> Fetching atomvm_packbeam v0.7.4
+    ===> Fetching atomvm_packbeam v0.8.1
     ===> Fetching rebar3_proper v0.12.1
     ===> Analyzing applications...
     ===> Compiling rebar3_proper
